@@ -1,74 +1,39 @@
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-.venv/
-venv/
-ENV/
-env/
-.conda/
-
 .env
 .env.*
 !.env.example
-config.local.toml
-config.local.yaml
-*.key
-*.pem
-secrets/
-private_key.txt
 
-*.db
-*.sqlite
-*.sqlite3
+# python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# db -- local state, not source
+db/derive_bot.db
 db/*.db
+
+# logs
 logs/
 *.log
 
-*.parquet
-*.csv
-*.jsonl
-data/
-backtest_data/
-historical/
+# venv
+.venv/
+venv/
+env/
 
-.idea/
+# ide
 .vscode/
+.idea/
 *.swp
 *.swo
-*~
-.project
-.pydevproject
-.settings/
 
+# os
 .DS_Store
 Thumbs.db
-desktop.ini
 
-# Testing y Coverage
-
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-.nox/
-*.tmp
-temp/
-tmp/
+# dist / build
+dist/
+build/
+*.egg-info/
