@@ -19,10 +19,15 @@ class Config:
     base_url: str = field(default_factory=lambda: _env("DERIVE_BASE_URL", "https://api-demo.lyra.finance"))
     ws_url:   str = field(default_factory=lambda: _env("DERIVE_WS_URL",   "wss://api-demo.lyra.finance/ws"))
 
-    # auth - all three required for live
-    wallet_private_key: str = field(default_factory=lambda: _env("WALLET_PRIVATE_KEY", ""))
-    wallet_address:     str = field(default_factory=lambda: _env("WALLET_ADDRESS", ""))
-    subaccount_id:      int = field(default_factory=lambda: _int("SUBACCOUNT_ID", 0))
+    # auth - all required for live
+    wallet_private_key:    str = field(default_factory=lambda: _env("WALLET_PRIVATE_KEY", ""))
+    wallet_address:        str = field(default_factory=lambda: _env("WALLET_ADDRESS", ""))
+    subaccount_id:         int = field(default_factory=lambda: _int("SUBACCOUNT_ID", 0))
+    # smart contract wallet on Derive Chain -- NOT the EOA above
+    # find it: Home > Developers > "Derive Wallet"
+    derive_wallet_address: str = field(default_factory=lambda: _env("DERIVE_WALLET_ADDRESS", ""))
+    # from docs.derive.xyz/reference/protocol-constants
+    domain_separator:      str = field(default_factory=lambda: _env("DERIVE_DOMAIN_SEPARATOR", ""))
 
     underlying: str  = field(default_factory=lambda: _env("UNDERLYING", "ETH"))
     mode:       str  = field(default_factory=lambda: _env("MODE", "paper"))
@@ -59,9 +64,11 @@ class Config:
 
     def validate(self) -> None:
         if self.is_live:
-            assert self.wallet_private_key, "WALLET_PRIVATE_KEY required for live"
-            assert self.wallet_address,     "WALLET_ADDRESS required for live"
-            assert self.subaccount_id > 0,  "SUBACCOUNT_ID required for live"
+            assert self.wallet_private_key,    "WALLET_PRIVATE_KEY required for live"
+            assert self.wallet_address,        "WALLET_ADDRESS required for live"
+            assert self.subaccount_id > 0,     "SUBACCOUNT_ID required for live"
+            assert self.derive_wallet_address, "DERIVE_WALLET_ADDRESS required (smart contract wallet)"
+            assert self.domain_separator,      "DERIVE_DOMAIN_SEPARATOR required -- see protocol constants"
         assert self.underlying in ("ETH", "BTC"), f"unsupported underlying: {self.underlying}"
         assert self.total_capital_usd > 0, "TOTAL_CAPITAL_USD must be positive"
 
