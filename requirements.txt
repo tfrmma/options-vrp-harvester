@@ -16,5 +16,4 @@ eth-account==0.13.7
 web3==7.16.0
 
 # live trading only -- pin tightly, EIP-712 serialization breaks silently on version mismatch
-# derive-action-signing==<pin after first install>
-# install from: pip install git+https://github.com/derivexyz/v2-action-signing-python
+derive_action_signing==0.0.13
