@@ -25,7 +25,8 @@ def _args():
     p.add_argument("--status",    action="store_true")
     p.add_argument("--backtest",  action="store_true")
     p.add_argument("--dashboard", action="store_true")
-    p.add_argument("--days", type=int, default=30, help="backtest window (days)")
+    p.add_argument("--report",    action="store_true")
+    p.add_argument("--days", type=int, default=7,  help="lookback window in days (report/backtest)")
     return p.parse_args()
 
 async def _scan_once():
@@ -94,6 +95,9 @@ def main():
     if args.dashboard:
         from utils.dashboard import run_dashboard
         asyncio.run(run_dashboard())
+    elif args.report:
+        from utils.report import run_report
+        asyncio.run(run_report(days=args.days, mode=cfg.mode))
     elif args.scan:
         asyncio.run(_scan_once())
     elif args.status:
