@@ -27,7 +27,9 @@ async def test_paper_engine():
         )
 
     # Use a future expiry date so parse_instrument returns positive DTE
-    EXP = "20260617"   # ~10 DTE from test run date
+    from datetime import datetime, timezone, timedelta
+    # always 10 days out so the test doesn't silently break when the date passes
+    EXP = (datetime.now(timezone.utc) + timedelta(days=10)).strftime("%Y%m%d")
 
     # IC with max_loss = $172 (USD-denominated, no spot multiply)
     # allocated = $2000 * 0.25 * 1.0 = $500 → 500/172 = 2.9 → floor = 2 contracts
