@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import signal
 import sys
+from datetime import datetime, timezone
 
 from config import cfg
 from core.derive_client import DeriveRESTClient, DeriveWSClient
 from data.vol_surface import VolSurface
-from db.database import init_db, get_open_positions
+from db.database import init_db, get_open_positions, insert_vol_snapshot
 from paper_trading.paper_engine import PaperTradingEngine
 from risk.risk_engine import RiskEngine
 from signals.signal_engine import SignalEngine
@@ -87,6 +88,7 @@ class DeriveBot:
             await asyncio.sleep(self._SURFACE_INTERVAL)
             try:
                 await self._surface.refresh()
+                await self._snapshot_surface()
                 # re-subscribe to any instruments that appeared since last refresh
                 new_channels = [
                     ch for ch in self._surface.ws_channels()
@@ -98,6 +100,31 @@ class DeriveBot:
             except Exception as e:
                 logger.error(f"surface refresh: {e}")
                 await asyncio.sleep(30)
+
+    async def _snapshot_surface(self) -> None:
+        """Persist a vol surface snapshot to DB for backtesting and reporting."""
+        s   = self._surface
+        vrp = s.vrp_signal()
+        if vrp is None:
+            return
+        skew = s.put_call_skew(30)
+        try:
+            await insert_vol_snapshot({
+                "ts":            datetime.now(timezone.utc).isoformat(),
+                "underlying":    cfg.underlying,
+                "spot_price":    s.spot,
+                "rv_1h":         vrp.get("rv_composite", 0) / 100,
+                "rv_4h":         vrp.get("rv_4h", 0) / 100,
+                "rv_24h":        vrp.get("rv_24h", 0) / 100,
+                "iv_atm_7d":     vrp.get("iv_7d", 0) / 100,
+                "iv_atm_14d":    vrp.get("iv_14d", 0) / 100,
+                "iv_atm_30d":    s.atm_iv(30) or 0,
+                "vrp_7d":        vrp.get("vrp_7d", 0),
+                "put_skew_30d":  skew.get("put_skew", 0) if skew else 0,
+                "call_skew_30d": skew.get("call_skew", 0) if skew else 0,
+            })
+        except Exception as e:
+            logger.debug(f"vol snapshot failed (non-fatal): {e}")
 
     async def _loop_scan(self) -> None:
         while self._running:
