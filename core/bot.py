@@ -150,7 +150,9 @@ class DeriveBot:
         await self._maybe_hedge(state)
 
     async def _try_open(self, opp, state) -> None:
-        decision = await self._risk.approve_trade(opp, state)
+        # live mode: pass REST client so risk engine can call private/get_margin
+        rest = self._rest if cfg.is_live else None
+        decision = await self._risk.approve_trade(opp, state, rest_client=rest)
         if decision.approved:
             if decision.notes:
                 logger.warning(decision.notes)
