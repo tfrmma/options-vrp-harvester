@@ -5,7 +5,7 @@ import math
 import re
 from collections import deque
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -380,3 +380,51 @@ class VolSurface:
                     "dte_diff": dte_diff,
                 })
         return sorted(out, key=lambda x: (x["delta_diff"], x["dte_diff"]))
+
+    # WS feed
+
+    def ws_channels(self) -> List[str]:
+        """
+        Return the list of ticker channels for all instruments currently in the surface.
+        Called once after the initial REST refresh to build the subscription list.
+        Channel format: ticker.{instrument_name}.1  (1 = every update)
+        """
+        channels = []
+        for strikes in self.surface.values():
+            for sides in strikes.values():
+                for data in sides.values():
+                    inst = data.get("instrument_name")
+                    if inst:
+                        channels.append(f"ticker.{inst}.1")
+        # deduplicate -- same instrument can appear in multiple strikes
+        return list(dict.fromkeys(channels))
+
+    def on_ws_ticker(self, channel: str, data: Dict) -> None:
+        """
+        WS handler for ticker.{instrument_name}.1 updates.
+        Updates a single instrument in-place without rebuilding the surface.
+        Called from DeriveWSClient dispatch -- must be non-blocking.
+        """
+        try:
+            inst_name = channel.split(".")[1] if "." in channel else ""
+            if not inst_name:
+                return
+
+            parsed = parse_instrument(inst_name)
+            if not parsed or not (0 < parsed["dte"] <= self._max_dte):
+                return
+
+            ticker = data.get("instrument_ticker", data)
+            self._ingest(self.surface, inst_name, parsed, {"instrument_ticker": ticker})
+
+            # keep spot fresh from index_price field if available
+            idx = data.get("index_price") or data.get("instrument_ticker", {}).get("index_price")
+            if idx:
+                px = float(idx)
+                if px > 0:
+                    self.spot = px
+                    self.rv_estimator.add_price(
+                        datetime.now(timezone.utc).timestamp() * 1000, px
+                    )
+        except Exception as e:
+            logger.debug(f"ws_ticker error [{channel}]: {e}")
