@@ -130,15 +130,27 @@ class RiskEngine:
 
     # pre-trade
     async def approve_trade(
-        self, opp: Opportunity, state: Optional[PortfolioState] = None,
+        self,
+        opp: Opportunity,
+        state: Optional[PortfolioState] = None,
+        rest_client=None,   # DeriveRESTClient -- required in live mode
     ) -> RiskDecision:
         if self._circuit_broken:
             return RiskDecision(False, f"circuit breaker: {self._circuit_reason}")
 
         state = state or self._state
-        margin_needed = self._margin_estimate(opp)
-        available = state.margin_available - self._current_capital * cfg.margin_buffer_pct
 
+        # live mode: ask Derive directly -- no more guessing with a static 40% buffer
+        # paper mode: static estimate is fine
+        if cfg.is_live and rest_client is not None:
+            margin_result = await self._live_margin_check(opp, rest_client)
+            if margin_result is not None:
+                return margin_result
+            # if API call fails, fall through to static estimate with a warning
+            logger.warning("live margin check failed - falling back to static estimate")
+
+        margin_needed = self._margin_estimate(opp)
+        available     = state.margin_available - self._current_capital * cfg.margin_buffer_pct
         if margin_needed > available:
             return RiskDecision(False, f"capital: need ${margin_needed:.0f}, have ${available:.0f}")
 
@@ -166,7 +178,63 @@ class RiskEngine:
         logger.info(f"trade approved: {opp.strategy_type.value} score={opp.score:.1f} size={adjusted_size:.2f}x")
         return RiskDecision(True, "ok", adjusted_size=round(adjusted_size, 2), notes=notes)
 
+    async def _live_margin_check(self, opp: Opportunity, rest_client) -> Optional[RiskDecision]:
+        """
+        Call private/get_margin with simulated positions before committing to a trade.
+        Returns a RiskDecision if we can make a clear call, None if the API fails.
+        """
+        try:
+            sim_positions = [
+                {
+                    "instrument_name": leg.instrument_name,
+                    # positive = long (buy), negative = short (sell)
+                    "amount": str(1.0 if leg.direction == "buy" else -1.0),
+                }
+                for leg in opp.legs
+            ]
+            result = await rest_client.get_margin(simulated_position_changes=sim_positions)
+            result = result.get("result", result)
+
+            is_valid       = result.get("is_valid_trade", False)
+            post_initial   = float(result.get("post_initial_margin", 0) or 0)
+            pre_initial    = float(result.get("pre_initial_margin", 0) or 0)
+            margin_delta   = post_initial - pre_initial
+
+            logger.info(
+                f"margin check: valid={is_valid} "
+                f"pre=${pre_initial:.0f} post=${post_initial:.0f} "
+                f"delta=${margin_delta:.0f}"
+            )
+
+            if not is_valid:
+                return RiskDecision(False, f"Derive margin check failed: post_initial=${post_initial:.0f}")
+
+            # size to fit within available capital
+            available = self._current_capital * (1 - cfg.margin_buffer_pct)
+            if post_initial > available:
+                return RiskDecision(
+                    False,
+                    f"post-trade margin ${post_initial:.0f} exceeds available ${available:.0f}"
+                )
+
+            # scale size down if margin delta is large relative to capital
+            max_notional  = cfg.total_capital_usd * cfg.max_position_pct
+            adjusted_size = min(1.0, max_notional / margin_delta) if margin_delta > 0 else 1.0
+
+            notes = f"live margin: post_initial=${post_initial:.0f}"
+            if opp.regime == VolRegime.HIGH:
+                adjusted_size *= 0.60
+                notes += " | size -40% (HIGH regime)"
+
+            logger.info(f"trade approved (live margin): {opp.strategy_type.value} size={adjusted_size:.2f}x")
+            return RiskDecision(True, "live margin ok", adjusted_size=round(adjusted_size, 2), notes=notes)
+
+        except Exception as e:
+            logger.error(f"live margin API error: {e}")
+            return None  # caller falls back to static estimate
+
     def _margin_estimate(self, opp: Opportunity) -> float:
+        # paper mode fallback -- 40% stress buffer over theoretical max loss
         if opp.strategy_type == StrategyType.IRON_CONDOR:
             return opp.max_loss * _MARGIN_STRESS
         if opp.strategy_type == StrategyType.CALENDAR_SPREAD:
