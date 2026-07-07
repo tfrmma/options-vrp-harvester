@@ -5,7 +5,7 @@ import signal
 import sys
 
 from config import cfg
-from core.derive_client import DeriveRESTClient
+from core.derive_client import DeriveRESTClient, DeriveWSClient
 from data.vol_surface import VolSurface
 from db.database import init_db, get_open_positions
 from paper_trading.paper_engine import PaperTradingEngine
@@ -16,7 +16,10 @@ from utils.logger import logger, setup_logger
 if cfg.is_live:
     from execution.live_engine import LiveExecutionEngine
 
+
 class DeriveBot:
+    # REST refresh still runs as a fallback and to pick up new instruments
+    # that listed after the last WS subscription batch
     _SURFACE_INTERVAL = 300   # 5min
     _SCAN_INTERVAL    = 60    # 1min
     _MONITOR_INTERVAL = 120   # 2min
@@ -24,6 +27,7 @@ class DeriveBot:
     def __init__(self):
         setup_logger(cfg.log_level)
         self._rest    = DeriveRESTClient()
+        self._ws      = DeriveWSClient()
         self._surface = VolSurface(self._rest)
         self._signals = SignalEngine(self._surface)
         self._risk    = RiskEngine()
@@ -40,13 +44,27 @@ class DeriveBot:
         except AssertionError as e:
             logger.critical(f"config error: {e}")
             sys.exit(1)
+
+        # initial REST snapshot -- gives us the instrument list for WS subs
         await self._surface.refresh()
+
+        # subscribe WS to all active ticker channels
+        await self._ws.connect()
+        channels = self._surface.ws_channels()
+        if channels:
+            await self._ws.subscribe(channels)
+            self._ws.on_channel_prefix("ticker.", self._surface.on_ws_ticker)
+            logger.info(f"WS: subscribed to {len(channels)} ticker channels")
+        else:
+            logger.warning("no channels to subscribe -- surface empty?")
+
         self._running = True
 
     async def run(self) -> None:
         await self.start()
         tasks = [
-            asyncio.create_task(self._loop_surface()),
+            asyncio.create_task(self._ws.listen()),          # WS feed (continuous)
+            asyncio.create_task(self._loop_surface()),        # REST fallback refresh
             asyncio.create_task(self._loop_scan()),
             asyncio.create_task(self._loop_monitor()),
         ]
@@ -58,11 +76,25 @@ class DeriveBot:
             pass
 
     # background loops
+
     async def _loop_surface(self) -> None:
+        """
+        Periodic REST rebuild. Catches new listings and corrects any drift
+        that accumulates from WS updates. Also re-subscribes to any new
+        instruments that weren't in the original subscription batch.
+        """
         while self._running:
             await asyncio.sleep(self._SURFACE_INTERVAL)
             try:
                 await self._surface.refresh()
+                # re-subscribe to any instruments that appeared since last refresh
+                new_channels = [
+                    ch for ch in self._surface.ws_channels()
+                    if ch not in self._ws._subscribed
+                ]
+                if new_channels:
+                    await self._ws.subscribe(new_channels)
+                    logger.info(f"WS: added {len(new_channels)} new channels")
             except Exception as e:
                 logger.error(f"surface refresh: {e}")
                 await asyncio.sleep(30)
@@ -86,6 +118,7 @@ class DeriveBot:
                 await asyncio.sleep(30)
 
     # core logic
+
     async def _scan_cycle(self) -> None:
         positions = await get_open_positions(mode=cfg.mode)
         state     = await self._risk.update_portfolio_state(positions=positions, spot=self._surface.spot)
@@ -158,7 +191,9 @@ class DeriveBot:
     async def shutdown(self) -> None:
         logger.info("shutting down...")
         self._running = False
+        await self._ws.disconnect()
         await self._rest.close()
+
 
 async def main():
     await DeriveBot().run()
