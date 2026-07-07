@@ -88,10 +88,17 @@ class DeriveRESTClient:
     async def get_subaccount(self) -> Dict:
         return await self._rpc("private/get_subaccount", {"subaccount_id": cfg.subaccount_id}, auth=True)
 
-    async def get_margin(self, simulated_positions: Optional[List] = None) -> Dict:
+    async def get_margin(self, simulated_position_changes: Optional[List] = None) -> Dict:
+        """
+        Fetch real margin state. With simulated_position_changes, returns
+        post_initial_margin and is_valid_trade for a hypothetical trade.
+
+        simulated_position_changes items: {instrument_name: str, amount: str}
+        Positive amount = long, negative = short.
+        """
         params: Dict = {"subaccount_id": cfg.subaccount_id}
-        if simulated_positions:
-            params["simulated_positions"] = simulated_positions
+        if simulated_position_changes:
+            params["simulated_position_changes"] = simulated_position_changes
         return await self._rpc("private/get_margin", params, auth=True)
 
     async def place_order(self, order_params: Dict) -> Dict:
