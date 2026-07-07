@@ -130,15 +130,20 @@ class DeriveWSClient:
     _BACKOFF_EXP  = 2.0
 
     def __init__(self):
-        self._ws           = None
-        self._handlers:    Dict[str, Callable] = {}
-        self._pending:     Dict[str, asyncio.Future] = {}
-        self._subscribed:  List[str] = []   # replayed on reconnect
-        self._running      = False
-        self._backoff      = self._BACKOFF_BASE
+        self._ws              = None
+        self._handlers:        Dict[str, Callable] = {}
+        self._prefix_handlers: Dict[str, Callable] = {}  # prefix -> handler
+        self._pending:         Dict[str, asyncio.Future] = {}
+        self._subscribed:      List[str] = []
+        self._running          = False
+        self._backoff          = self._BACKOFF_BASE
 
     def on_channel(self, channel: str, handler: Callable) -> None:
         self._handlers[channel] = handler
+
+    def on_channel_prefix(self, prefix: str, handler: Callable) -> None:
+        """Route all channels starting with prefix to handler. Used for ticker.* feeds."""
+        self._prefix_handlers[prefix] = handler
 
     async def connect(self) -> None:
         logger.info(f"WS connecting: {cfg.ws_url}")
@@ -204,9 +209,17 @@ class DeriveWSClient:
 
         if msg.get("method") == "subscription":
             channel = msg["params"]["channel"]
+            data    = msg["params"]["data"]
+
+            # exact match first, then prefix match
             handler = self._handlers.get(channel)
+            if handler is None:
+                for prefix, h in self._prefix_handlers.items():
+                    if channel.startswith(prefix):
+                        handler = h
+                        break
+
             if handler:
-                data = msg["params"]["data"]
                 if asyncio.iscoroutinefunction(handler):
                     asyncio.create_task(handler(channel, data))
                 else:
